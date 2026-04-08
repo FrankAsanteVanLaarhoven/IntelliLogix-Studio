@@ -1,0 +1,48 @@
+name: Deploy IntelliLogix Studio to GCP
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build Application
+        run: npm run build
+
+      - name: Create Production Archive
+        run: tar -czvf plc-ai-dist.tar.gz dist/
+
+      - name: Secure SCP to GCP
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.GCP_HOST }}
+          username: ${{ secrets.GCP_USERNAME }}
+          key: ${{ secrets.GCP_SSH_KEY }}
+          source: "plc-ai-dist.tar.gz"
+          target: "/home/${{ secrets.GCP_USERNAME }}/"
+
+      - name: Restart Nginx Container
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.GCP_HOST }}
+          username: ${{ secrets.GCP_USERNAME }}
+          key: ${{ secrets.GCP_SSH_KEY }}
+          script: |
+            rm -rf /home/${{ secrets.GCP_USERNAME }}/plc-ai-dist
+            mkdir /home/${{ secrets.GCP_USERNAME }}/plc-ai-dist
+            tar -xzvf /home/${{ secrets.GCP_USERNAME }}/plc-ai-dist.tar.gz -C /home/${{ secrets.GCP_USERNAME }}/plc-ai-dist --strip-components=1
+            sudo docker restart plc-ai-web
