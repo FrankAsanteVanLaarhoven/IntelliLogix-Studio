@@ -23,9 +23,12 @@ export const useTelemetry = () => {
       }
     };
 
+    ws.onerror = () => {
+      // Quietly ignore the error, frontend can survive without telemetry
+    };
+
     ws.onclose = () => {
       setConnected(false);
-      console.log('Telemetry WebSocket closed');
     };
 
     return () => {

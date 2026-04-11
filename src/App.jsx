@@ -6,6 +6,7 @@ import LadderLogicEditor from './components/LadderLogicEditor';
 import VisionInferencePanel from './components/VisionInferencePanel';
 import HardwareSandboxPanel from './components/HardwareSandboxPanel';
 import DraggableWindow from './components/DraggableWindow';
+import ProjectWizard from './components/ProjectWizard';
 import { processes, CategoryStyles, learnItems } from './utils/data';
 import { useTelemetry } from './hooks/useTelemetry';
 import './index.css';
@@ -29,6 +30,7 @@ const App = () => {
   const [panels, setPanels] = useState([]);
   const [inputText, setInputText] = useState('');
   const [toast, setToast] = useState(null);
+  const [qrUrl, setQrUrl] = useState('');
   
   // Real-time backend connection
   const { data: telemetryMap, connected: wsConnected } = useTelemetry();
@@ -44,6 +46,12 @@ const App = () => {
     applyTheme();
     const mediaQuery = window.matchMedia('(prefers-color-scheme: light)');
     mediaQuery.addEventListener('change', applyTheme);
+    
+    // Generate Mobile QR Access URL
+    if (window.innerWidth > 768) {
+      setQrUrl(`https://api.qrserver.com/v1/create-qr-code/?size=150x150&bgcolor=08080D&color=00E5A0&data=${encodeURIComponent(window.location.href)}`);
+    }
+    
     return () => mediaQuery.removeEventListener('change', applyTheme);
   }, [theme]);
 
@@ -84,6 +92,7 @@ const App = () => {
     if (text.startsWith('twin')) return addPanel('twin', processes.find(p => p.id === text.split(' ')[1]) || processes[18]);
     if (text.startsWith('uncertainty')) return addPanel('uncertainty', processes.find(p => p.id === text.split(' ')[1]) || processes[18]);
     if (text === 'list all') return addPanel('list');
+    if (text === 'start wizard' || text === 'new project') return addPanel('wizard');
     if (text === 'safety query') {
       addPanel('safety', {});
       return showToast('Safety validators active', 'in');
@@ -115,6 +124,7 @@ const App = () => {
       if (verb === 'HARDWARE_SANDBOX') return addPanel('sandbox');
       if (verb === 'LEARN') return addPanel('learn', { sec: learnItems[0] });
       if (verb === 'LIST_ALL') return addPanel('list');
+      if (verb === 'WIZARD') return addPanel('wizard');
       
       // Basic fallback
       addPanel('list');
@@ -275,6 +285,17 @@ const App = () => {
           <p style={{ fontSize: 'clamp(11px, 1.5vw, 16px)', fontWeight: 300, color: 'var(--t3)', marginTop: 8 }}>Speak. The interface adapts.</p>
           <p style={{ fontSize: 10, fontWeight: 500, color: 'var(--t4)', marginTop: 24, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Manufacturing &middot; Mining &middot; Upstream &middot; Downstream &middot; 2026</p>
           <p style={{ fontSize: 12, color: 'var(--t2)', marginTop: 40, animation: 'pulse 2s infinite' }}>Click anywhere to enter</p>
+          
+          {/* Mobile Access QR */}
+          {qrUrl && (
+             <div onClick={(e) => e.stopPropagation()} style={{ position: 'absolute', bottom: 30, right: 30, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, background: 'var(--inp)', padding: 16, borderRadius: 12, border: '1px solid var(--bd)', backdropFilter: 'blur(10px)', boxShadow: 'var(--sh)' }}>
+                <img src={qrUrl} width={100} height={100} alt="Mobile Access QR" style={{ borderRadius: 6, opacity: 0.9 }} />
+                <div style={{ fontSize: 10, color: 'var(--t3)', textAlign: 'center', fontWeight: 600 }}>Scan for Mobile Access</div>
+                {window.location.hostname === 'localhost' && (
+                  <div style={{ fontSize: 8, color: 'var(--warn, #e8a000)', maxWidth: 100, textAlign: 'center', lineHeight: 1.2 }}>Note: Use your network IP (e.g. 192.168.x.x) for the code to resolve.</div>
+                )}
+             </div>
+          )}
         </div>
       )}
 
@@ -338,9 +359,21 @@ const App = () => {
               </DraggableWindow>
             );
             if (panel.type === 'sandbox') return (
-              <DraggableWindow key={panel.id} id={panel.id} title="Tinkercad-Style Hardware Sandbox" iconColor="var(--ac)" defaultWidth={1200} defaultHeight={750} defaultX={ix} defaultY={iy} onClose={() => removePanel(panel.id)} bringToFront={() => bringToFront(panel.id)}>
+              <DraggableWindow key={panel.id} id={panel.id} title="AI Hardware Sandbox" iconColor="var(--ac)" defaultWidth={1200} defaultHeight={750} defaultX={ix} defaultY={iy} onClose={() => removePanel(panel.id)} bringToFront={() => bringToFront(panel.id)}>
                 <div style={{ pointerEvents: 'auto', width: '100%', height: '100%', display: 'flex' }}>
-                  <HardwareSandboxPanel />
+                  <HardwareSandboxPanel config={panel.data} />
+                </div>
+              </DraggableWindow>
+            );
+            if (panel.type === 'wizard') return (
+              <DraggableWindow key={panel.id} id={panel.id} title="Project Wizard" iconColor="var(--ac)" defaultWidth={700} defaultHeight={550} defaultX={ix} defaultY={iy} onClose={() => removePanel(panel.id)} bringToFront={() => bringToFront(panel.id)}>
+                <div style={{ pointerEvents: 'auto', width: '100%', height: '100%', display: 'flex' }}>
+                  <ProjectWizard onClose={() => removePanel(panel.id)} onComplete={(data) => {
+                    removePanel(panel.id);
+                    addPanel('sandbox', { setup: 'wizard', prompt: data.prompt });
+                    addPanel('ladder');
+                    showToast('Project initialized by AI', 'ok');
+                  }} />
                 </div>
               </DraggableWindow>
             );
@@ -353,6 +386,7 @@ const App = () => {
         <div style={{ position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', width: 'min(580px, 86vw)', zIndex: 500 }}>
           <div style={{ display: 'flex', gap: 4, justifyContent: 'center', marginBottom: 5, flexWrap: 'wrap' }}>
             <button className="ch" onClick={() => handleCommand("open hardware sandbox")}>Hardware Sandbox</button>
+            <button className="ch" onClick={() => handleCommand("start wizard")}>✨ AI Project Wizard</button>
             <button className="ch" onClick={() => handleCommand("connect hardware")}>Connect Hardware</button>
             <button className="ch" onClick={() => handleCommand("open ladder editor")}>Ladder</button>
             <button className="ch" onClick={() => handleCommand("vision")}>Camera Node</button>

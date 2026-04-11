@@ -4,7 +4,7 @@ import { useBackplane } from '../context/BackplaneContext';
 
 const DigitalTwinCanvas = ({ theme, process }) => {
   const canvasRef = useRef(null);
-  const { globalMemory } = useBackplane();
+  const { globalMemory, updateMemory } = useBackplane();
   const memoryRef = useRef(globalMemory);
   
   // Keep ref up to date natively without refiring useEffect reset
@@ -91,7 +91,8 @@ const DigitalTwinCanvas = ({ theme, process }) => {
       ctx.clearRect(0, 0, w, h);
       
       // Drive simulation ONLY if Logic Ladder computes a TRUE output. (Sim2Val)
-      if (memoryRef.current['Output_1']) {
+      // Checks for either Output_1 or Motor_Cmd to support standard PLC conventions
+      if (memoryRef.current['Output_1'] || memoryRef.current['Motor_Cmd'] || memoryRef.current['Pump_Cmd']) {
         t += 0.02;
       }
 
@@ -104,14 +105,22 @@ const DigitalTwinCanvas = ({ theme, process }) => {
         ctx.strokeRect(30, by - 5, w - 60, 10);
         tgr(ctx, 55, by, 14, 8, t * 2);
         tgr(ctx, w - 55, by, 14, 8, -t * 2);
+        
+        let sensorActive = false;
         for (let i = 0; i < 5; i++) {
           const bx = ((t * 45 + i * 80) % (w - 130)) + 65;
           ctx.strokeStyle = tca(0.25);
           ctx.lineWidth = 1;
           ctx.strokeRect(bx, by - 14, 18, 10);
+          
+          if (w * 0.7 >= bx && w * 0.7 <= bx + 18) sensorActive = true;
         }
-        ctx.fillStyle = tac(0.18, 'warn');
+        ctx.fillStyle = sensorActive ? tac(0.9, 'warn') : tac(0.18, 'warn');
         ctx.fillRect(w * 0.7, by - 28, 2, 14);
+        
+        // Broadcast the physical state back to the hardware backplane seamlessly
+        updateMemory('Input_1', sensorActive);
+        
         tlb(ctx, w * 0.7 + 1, by - 38, 'SENSOR', tac(0.35, 'warn'));
         tfl(ctx, 80, by, 1, 0, 3, t);
         tlb(ctx, 55, by + 18, 'MOTOR', ttx(0.35));
@@ -143,6 +152,10 @@ const DigitalTwinCanvas = ({ theme, process }) => {
           tfl(ctx, cx + pp.d * cW / 2, pp.y, pp.d, 0, 2, t, tac(0.18, pp.c));
           tlb(ctx, ex + pp.d * 16, pp.y + 3, pp.l, tac(0.4, pp.c));
         });
+        
+        // Pass a condenser trigger based on logic thresholds 
+        updateMemory('Input_1', lv > 0.45);
+        
         tlb(ctx, cx, cT + cH + 32, 'DISTILLATION — LIVE', ttx(0.35));
       } else if (tw === 'wellhead') {
         const cx = w * 0.45;
@@ -158,6 +171,10 @@ const DigitalTwinCanvas = ({ theme, process }) => {
         ctx.strokeStyle = tac(0.25, 'info'); ctx.lineWidth = 1; ctx.strokeRect(cx - 18, h * 0.64, 36, 28);
         tlb(ctx, cx, h * 0.64 + 14, 'SEP', tac(0.3, 'info'));
         tfl(ctx, cx, h * 0.14, 0, 1, 3, t);
+        
+        // Emulate pressure switch cycle
+        updateMemory('Input_1', Math.sin(t * 3) > 0.5);
+        
         tlb(ctx, cx, h - 5, 'WELLHEAD — LIVE', ttx(0.35));
       } else if (tw === 'pump') {
         const cx = w * 0.4, cy = h * 0.44;
@@ -172,6 +189,10 @@ const DigitalTwinCanvas = ({ theme, process }) => {
         tfl(ctx, cx - 40, cy, 1, 0, 2, t, tac(0.15, 'info'));
         ctx.beginPath(); ctx.moveTo(cx + 22, cy); ctx.lineTo(cx + 56, cy); ctx.strokeStyle = tca(0.25); ctx.lineWidth = 2; ctx.stroke();
         tfl(ctx, cx + 26, cy, 1, 0, 2, t);
+        
+        // Pump flow active toggle
+        updateMemory('Input_1', true);
+        
         tlb(ctx, cx, h - 5, 'PUMP — LIVE', ttx(0.35));
       } else if (tw === 'separator') {
         const cx = w * 0.5, cy = h * 0.38;
@@ -225,8 +246,13 @@ const DigitalTwinCanvas = ({ theme, process }) => {
         const lv = 0.5 + Math.sin(t * 0.2) * 0.1, lY = cy + 28 - 56 * (1 - lv);
         ctx.fillStyle = tac(0.03, 'warn'); ctx.fillRect(cx - 29, lY, 58, cy + 27 - lY);
         ctx.beginPath(); ctx.moveTo(cx, cy - 36); ctx.lineTo(cx, cy + 10); ctx.strokeStyle = ttx(0.12); ctx.lineWidth = 1; ctx.stroke();
+        const phInt = Math.floor((t * 0.15) % 5);
         const ph = ['CHARGE', 'HEAT', 'REACT', 'COOL', 'DISCHARGE'];
-        tlb(ctx, cx, cy + 38, 'PHASE: ' + ph[Math.floor((t * 0.15) % 5)], tac(0.45, 'warn'));
+        
+        // Trigger high limit alarm randomly based on animation bounds
+        updateMemory('Input_1', phInt === 2);
+        
+        tlb(ctx, cx, cy + 38, 'PHASE: ' + ph[phInt], tac(0.45, 'warn'));
         tlb(ctx, cx, h - 5, 'BATCH — LIVE', ttx(0.35));
       } else if (tw === 'blending') {
         const cx = w * 0.5;

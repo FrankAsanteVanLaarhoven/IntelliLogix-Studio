@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { processes } from '../utils/data';
 import { useWebSerial } from '../hooks/useWebSerial';
 import { useBackplane } from '../context/BackplaneContext';
+import AiCopilotPanel from './AiCopilotPanel';
 import { 
   Cpu, Activity, Settings, Square, Zap, Lightbulb, 
   Hexagon, CircleDashed, Radar, Eye, Battery, PowerOff,
@@ -23,7 +24,7 @@ const COMPONENT_LIBRARY = [
   { id: 'c12', name: 'Relay SPDT', type: 'switch', icon: PowerOff, color: '#e11d48' }
 ];
 
-export default function HardwareSandboxPanel() {
+export default function HardwareSandboxPanel({ config }) {
   const [canvasItems, setCanvasItems] = useState([]);
   const [wires, setWires] = useState([]);
   const [drawingWire, setDrawingWire] = useState(null);
@@ -32,10 +33,98 @@ export default function HardwareSandboxPanel() {
   const [autoScroll, setAutoScroll] = useState(true);
   const { globalMemory } = useBackplane();
   
+  const [showCodePanel, setShowCodePanel] = useState(false);
+  const [plotHistory, setPlotHistory] = useState([]);
+  
+  // Drag Engine State
+  const [dragging, setDragging] = useState(null); 
+  // format: { source: 'lib'|'canvas', id: string, config: object, px: number, py: number, offsetX: number, offsetY: number }
+
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
   const galleryRef = useRef(null);
   const scrollAnimRef = useRef(null);
+
+  useEffect(() => {
+    if (config?.setup === 'wizard') {
+      const p = (config.prompt || '').toLowerCase();
+      
+      let identifiedComponents = [];
+      let wiresToDraw = [];
+
+      // 1. Power Source (Mandatory)
+      identifiedComponents.push({ ...COMPONENT_LIBRARY.find(c => c.type === 'power'), instanceId: 'batt', x: 50, y: 150 });
+      
+      // 2. Intelligence Cores
+      let mcuInst = null;
+      let plcInst = null;
+      
+      if (p.includes('esp32') || p.includes('arduino') || p.includes('micro') || p.includes('board') || p.includes('mcu')) {
+         mcuInst = 'mcu1';
+         identifiedComponents.push({ ...COMPONENT_LIBRARY.find(c => c.name.includes('Arduino') || c.type === 'mcu'), instanceId: mcuInst, x: 250, y: 150 });
+         wiresToDraw.push({ id: 'w_pwr_mcu', from: 'batt', to: mcuInst, color: '#ef4444' });
+      }
+      if (p.includes('plc') || p.includes('s7') || p.includes('allen') || p.includes('omron') || p.includes('industrial')) {
+         plcInst = 'plc1';
+         identifiedComponents.push({ ...COMPONENT_LIBRARY.find(c => c.type === 'plc'), instanceId: plcInst, x: 550, y: 150 });
+         if (mcuInst) {
+            wiresToDraw.push({ id: 'w_mcu_plc', from: mcuInst, to: plcInst, color: '#10b981' }); // Edge -> PLC interface
+         } else {
+            wiresToDraw.push({ id: 'w_pwr_plc', from: 'batt', to: plcInst, color: '#ef4444' });
+         }
+      }
+
+      // Fallback core if none requested
+      if (!mcuInst && !plcInst) {
+         mcuInst = 'mcu1';
+         identifiedComponents.push({ ...COMPONENT_LIBRARY[0], instanceId: mcuInst, x: 250, y: 150 });
+         wiresToDraw.push({ id: 'w_pwr_mcu', from: 'batt', to: mcuInst, color: '#ef4444' });
+      }
+      const coreLogic = plcInst || mcuInst;
+
+      // 3. Sensory Input
+      if (p.includes('vision') || p.includes('ultrasonic') || p.includes('distance') || p.includes('sensor')) {
+         identifiedComponents.push({ ...COMPONENT_LIBRARY.find(c => c.name.includes('Ultrasonic')), instanceId: 'sens1', x: 50, y: 350 });
+         wiresToDraw.push({ id: 'w_sens1_core', from: 'sens1', to: (mcuInst || coreLogic), color: '#3b82f6' });
+      }
+      if (p.includes('pir') || p.includes('motion') || p.includes('movement')) {
+         identifiedComponents.push({ ...COMPONENT_LIBRARY.find(c => c.name.includes('PIR')), instanceId: 'sens2', x: 250, y: 350 });
+         wiresToDraw.push({ id: 'w_sens2_core', from: 'sens2', to: (mcuInst || coreLogic), color: '#0ea5e9' });
+      }
+
+      // 4. Actuators / Outputs
+      if (p.includes('motor') || p.includes('conveyor') || p.includes('drive') || p.includes('wheel')) {
+         identifiedComponents.push({ ...COMPONENT_LIBRARY.find(c => c.name.includes('DC Motor')), instanceId: 'out1', x: 800, y: 300 });
+         wiresToDraw.push({ id: 'w_core_out1', from: coreLogic, to: 'out1', color: '#8b5cf6' });
+         // Industrial safety feedback loops if PLC is handling it
+         if (plcInst) wiresToDraw.push({ id: 'w_fb_out1', from: 'out1', to: plcInst, color: '#f59e0b' });
+      }
+      if (p.includes('servo') || p.includes('arm') || p.includes('stepper') || p.includes('robot')) {
+         identifiedComponents.push({ ...COMPONENT_LIBRARY.find(c => c.name.includes('Micro Servo')), instanceId: 'out2', x: 800, y: 150 });
+         wiresToDraw.push({ id: 'w_core_out2', from: coreLogic, to: 'out2', color: '#d946ef' });
+      }
+      if (p.includes('led') || p.includes('light') || p.includes('indicator') || p.includes('lamp')) {
+         identifiedComponents.push({ ...COMPONENT_LIBRARY.find(c => c.name.includes('LED')), instanceId: 'out3', x: 550, y: 350 });
+         wiresToDraw.push({ id: 'w_core_out3', from: coreLogic, to: 'out3', color: '#ec4899' });
+      }
+      if (p.includes('relay') || p.includes('switch') || p.includes('valve') || p.includes('pump')) {
+         identifiedComponents.push({ ...COMPONENT_LIBRARY.find(c => c.name.includes('Relay')), instanceId: 'out4', x: 800, y: 50 });
+         wiresToDraw.push({ id: 'w_core_out4', from: coreLogic, to: 'out4', color: '#e11d48' });
+      }
+
+      // Ensure at least one output if parsing misses everything
+      if (identifiedComponents.length <= 2) {
+         identifiedComponents.push({ ...COMPONENT_LIBRARY.find(c => c.name.includes('LED')), instanceId: 'f_out', x: 550, y: 350 });
+         wiresToDraw.push({ id: 'w_f_out', from: coreLogic, to: 'f_out', color: '#ec4899' });
+      }
+
+      setCanvasItems(identifiedComponents);
+      setWires(wiresToDraw);
+      
+      // Auto-open AI Copilot panel to complement the auto-wiring
+      setShowCodePanel(true);
+    }
+  }, [config]);
 
   useEffect(() => {
     if (!autoScroll) {
@@ -62,11 +151,13 @@ export default function HardwareSandboxPanel() {
     };
   }, [autoScroll]);
 
-  // Drag Engine State
-  const [dragging, setDragging] = useState(null); 
-  // format: { source: 'lib'|'canvas', id: string, config: object, px: number, py: number, offsetX: number, offsetY: number }
-
   const { isConnected, lastMessage, connect, disconnect, writeCommand } = useWebSerial(9600);
+
+  useEffect(() => {
+    if (lastMessage && lastMessage.val !== undefined) {
+       setPlotHistory(prev => [...prev.slice(-49), lastMessage.val]);
+    }
+  }, [lastMessage]);
 
   useEffect(() => {
     if (!isSimulating || !isConnected) return;
@@ -234,7 +325,7 @@ export default function HardwareSandboxPanel() {
         </div>
       </div>
 
-      <div style={{ display: 'flex', flex: 1, position: 'relative' }}>
+      <div className="hwa-container" style={{ display: 'flex', flex: 1, position: 'relative' }}>
         
         {/* 2. MAIN CANVAS */}
         <div 
@@ -255,7 +346,7 @@ export default function HardwareSandboxPanel() {
             >
               {isConnected ? 'USB Connected' : 'Connect COM Port'}
             </button>
-            <button style={{ border: '1px solid var(--bd)', background: '#fff', color: '#000', borderRadius: 6, padding: '6px 12px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>&lt;/&gt; Code</button>
+            <button onClick={() => setShowCodePanel(!showCodePanel)} style={{ border: showCodePanel ? '1px solid var(--ac)' : '1px solid var(--bd)', background: showCodePanel ? 'var(--acm)' : '#fff', color: showCodePanel ? 'var(--ac)' : '#000', borderRadius: 6, padding: '6px 12px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>✨ AI Gen / Code</button>
             <button 
               onClick={() => setIsSimulating(!isSimulating)}
               style={{ border: 'none', background: isSimulating ? '#ef4444' : '#10b981', color: '#fff', borderRadius: 6, padding: '6px 12px', fontSize: 11, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', transition: 'background 0.2s' }}>
@@ -263,11 +354,26 @@ export default function HardwareSandboxPanel() {
             </button>
           </div>
           
-          {/* Serial Monitor Overlay */}
+          {/* Serial Monitor & Plotter Overlay */}
           {isConnected && (
-             <div style={{ position: 'absolute', bottom: 12, left: 12, right: 12, background: 'rgba(0,0,0,0.85)', color: '#10b981', padding: 10, fontSize: 11, fontFamily: 'monospace', borderRadius: 6, maxHeight: 120, overflowY: 'auto' }}>
-                <div style={{ color: '#9ca3af', marginBottom: 6, fontWeight: 600 }}>[COM PORT OPEN] - Bi-Directional Stream:</div>
-                <div>{lastMessage ? JSON.stringify(lastMessage) : 'Listening for telemetry payload...'}</div>
+             <div style={{ position: 'absolute', bottom: 12, left: 12, right: 12, background: 'rgba(0,0,0,0.85)', color: '#10b981', padding: 10, fontSize: 11, fontFamily: 'monospace', borderRadius: 6, maxHeight: 150 }}>
+                <div style={{ color: '#9ca3af', marginBottom: 6, fontWeight: 600, display: 'flex', justifyContent: 'space-between' }}>
+                  <span>[COM PORT OPEN] - Serial Monitor & Scope Plotter:</span>
+                  <span style={{ color: 'var(--inf)' }}>VAL: {plotHistory[plotHistory.length - 1] || '--'}</span>
+                </div>
+                <div style={{ display: 'flex', gap: 12 }}>
+                  <div style={{ flex: 1, whiteSpace: 'pre-wrap', overflowY: 'auto', maxHeight: 100 }}>
+                    {lastMessage ? JSON.stringify(lastMessage) : 'Listening for telemetry payload...'}
+                  </div>
+                  <div style={{ flex: 2, height: 100, borderLeft: '1px dotted var(--bd)', paddingLeft: 12, display: 'flex', alignItems: 'flex-end', gap: 2 }}>
+                    {plotHistory.map((val, i) => {
+                       const h = Math.min((val / 1024) * 100, 100);
+                       return (
+                         <div key={i} style={{ flex: 1, background: 'var(--inf)', minWidth: 2, height: `${h}%`, opacity: 0.8 }} />
+                       );
+                    })}
+                  </div>
+                </div>
              </div>
           )}
 
@@ -291,6 +397,7 @@ export default function HardwareSandboxPanel() {
               return (
                 <path 
                   key={w.id}
+                  className={isSimulating ? "wire-animated" : ""}
                   d={`M ${x1} ${y1} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${x2} ${y2}`}
                   fill="none"
                   stroke={w.color || "#475569"}
@@ -305,14 +412,14 @@ export default function HardwareSandboxPanel() {
             })}
             
             {drawingWire && (
-               <path 
-                 d={`M ${drawingWire.x1} ${drawingWire.y1} C ${drawingWire.x1 + Math.abs(drawingWire.curX - drawingWire.x1)/2} ${drawingWire.y1}, ${drawingWire.curX - Math.abs(drawingWire.curX - drawingWire.x1)/2} ${drawingWire.curY}, ${drawingWire.curX} ${drawingWire.curY}`}
-                 fill="none"
-                 stroke="#94a3b8"
-                 strokeWidth="4"
-                 strokeDasharray="5 5"
-               />
-            )}
+                <path 
+                  className="wire-animated"
+                  d={`M ${drawingWire.x1} ${drawingWire.y1} C ${drawingWire.x1 + Math.abs(drawingWire.curX - drawingWire.x1)/2} ${drawingWire.y1}, ${drawingWire.curX - Math.abs(drawingWire.curX - drawingWire.x1)/2} ${drawingWire.curY}, ${drawingWire.curX} ${drawingWire.curY}`}
+                  fill="none"
+                  stroke={isSimulating ? "#10b981" : "#94a3b8"}
+                  strokeWidth="4"
+                />
+             )}
           </svg>
 
           {/* Render Items */}
@@ -336,16 +443,20 @@ export default function HardwareSandboxPanel() {
                 style={{
                   position: 'absolute', left: item.x, top: item.y,
                   width: 84, height: 84, background: 'var(--inp)', borderRadius: 8, backdropFilter: 'blur(12px)',
-                  boxShadow: (dragging?.id === item.instanceId) ? 'var(--sh)' : '0 4px 10px rgba(0,0,0,0.2)',
+                  boxShadow: (dragging?.id === item.instanceId) ? 'var(--sh)' : (isSimulating ? `0 0 14px ${item.color}4D` : '0 4px 10px rgba(0,0,0,0.2)'),
                   display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                  border: '1px solid var(--bd)', cursor: dragging ? 'grabbing' : 'grab',
+                  border: isSimulating ? `1px solid ${item.color}66` : '1px solid var(--bd)', 
+                  cursor: dragging ? 'grabbing' : 'grab',
                   zIndex: (dragging?.id === item.instanceId) ? 100 : 10,
                   transform: (dragging?.id === item.instanceId) ? 'scale(1.05)' : 'scale(1)',
                   transition: 'box-shadow 0.15s, transform 0.15s, border-color 0.15s'
                 }}
               >
                 <div style={{ color: item.color, marginBottom: 6 }}><IconComp size={32} strokeWidth={1.5} /></div>
-                <div style={{ fontSize: 9, fontWeight: 600, color: 'var(--tx)', textAlign: 'center', px: 4, lineHeight: 1.1 }}>{item.name}</div>
+                <div style={{ fontSize: 9, fontWeight: 600, color: 'var(--tx)', textAlign: 'center', padding: '0 4px', lineHeight: 1.1 }}>{item.name}</div>
+                
+                {/* Dataflow Active Notification LED */}
+                <div className={isSimulating ? 'node-pulse' : ''} style={{ position: 'absolute', top: 6, right: 6, width: 6, height: 6, borderRadius: '50%', background: isSimulating ? '#10b981' : '#475569', boxShadow: isSimulating ? '0 0 6px #10b981' : 'none', transition: 'all 0.3s' }} />
                 
                 {/* Wiring Nodes */}
                 <div 
@@ -390,7 +501,7 @@ export default function HardwareSandboxPanel() {
         </div>
 
         {/* 3. HARDWARE TOOLBOX */}
-        <div style={{ width: 280, background: 'var(--bg)', borderLeft: '1px solid var(--bd)', display: 'flex', flexDirection: 'column', zIndex: 50 }}>
+        <div className="hwa-sidebar" style={{ width: 280, background: 'var(--bg)', borderLeft: '1px solid var(--bd)', display: 'flex', flexDirection: 'column', zIndex: 50 }}>
           
           <div style={{ padding: 12, borderBottom: '1px solid var(--bd)', background: 'var(--sf)' }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--tx)', marginBottom: 8 }}>Components</div>
@@ -405,12 +516,22 @@ export default function HardwareSandboxPanel() {
             />
           </div>
 
-          <div style={{ flex: 1, overflowY: 'auto', padding: 12, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr)', gap: 10, alignContent: 'start' }}>
+          <div className="hwa-gallery" style={{ flex: 1, overflowY: 'auto', padding: 12, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr)', gap: 10, alignContent: 'start' }}>
             {COMPONENT_LIBRARY.map(comp => {
               const IconComp = comp.icon;
               return (
                 <div 
-                  key={comp.id} 
+                  key={comp.id}
+                  onClick={() => {
+                    const x = 300 + (canvasItems.length * 15) % 150;
+                    const y = 200 + (canvasItems.length * 15) % 150;
+                    setCanvasItems(prev => [...prev, {
+                      ...comp,
+                      instanceId: `inst_${Date.now()}`,
+                      x,
+                      y
+                    }]);
+                  }}
                   onPointerDown={(e) => {
                     const rect = e.currentTarget.getBoundingClientRect();
                     setDragging({
@@ -444,6 +565,11 @@ export default function HardwareSandboxPanel() {
           </div>
           
         </div>
+
+        {/* AI Copilot Panel */}
+        {showCodePanel && (
+           <AiCopilotPanel onClose={() => setShowCodePanel(false)} items={canvasItems} wires={wires} />
+        )}
         
         {/* Render Ghost Drag Item over the entire container when dragging from Library */}
         {dragging?.source === 'lib' && (

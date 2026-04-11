@@ -83,7 +83,11 @@ export function useWebSerial(defaultBaudRate = 9600) {
       writerRef.current = null;
     }
     if (portRef.current) {
-      await portRef.current.close();
+      try {
+        await portRef.current.close();
+      } catch (err) {
+        console.warn("Serial closure warning (locked stream gracefully ignored):", err);
+      }
       portRef.current = null;
     }
     setIsConnected(false);
